@@ -15,7 +15,6 @@ export default function LoginPage() {
 
     const supabase = createClient();
 
-    // Step 1: Sign in — sets session in browser immediately
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
       email: form.email,
       password: form.password,
@@ -26,26 +25,27 @@ export default function LoginPage() {
       return setError("Invalid email or password.");
     }
 
-    // Step 2: Query profile — session is already set so RLS auth.uid() works
+    const userId = authData.user.id;
+
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
       .select("role, status")
-      .eq("id", authData.user.id)
+      .eq("id", userId)
       .single();
 
+    // Show exact error for debugging
     if (profileError || !profile) {
       setLoading(false);
-      return setError("Could not load your profile. Please try again.");
+      return setError(`DB Error: ${profileError?.message || "no profile returned"} | uid: ${userId}`);
     }
 
-    // Step 3: Redirect using full page navigation (ensures cookie is sent)
     if (profile.role === "creator") {
       window.location.href = "/creator";
     } else if (profile.status === "approved") {
       window.location.href = "/dashboard";
     } else if (profile.status === "rejected") {
       setLoading(false);
-      setError("Your application was not approved. Contact support.");
+      setError("Your application was not approved.");
     } else {
       window.location.href = "/pending";
     }
@@ -67,7 +67,7 @@ export default function LoginPage() {
             value={form.password} onChange={e => setForm({ ...form, password: e.target.value })}
             className="w-full border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-brand"
           />
-          {error && <p className="text-red-500 text-sm">{error}</p>}
+          {error && <p className="text-red-500 text-sm break-all">{error}</p>}
           <button type="submit" disabled={loading}
             className="w-full bg-brand hover:bg-brand-dark text-white font-semibold py-3 rounded-xl transition-colors disabled:opacity-50">
             {loading ? "Logging in..." : "Log In"}
