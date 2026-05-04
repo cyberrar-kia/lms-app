@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function middleware(request: NextRequest) {
@@ -12,7 +12,7 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options?: CookieOptions }[]) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
@@ -28,12 +28,10 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   const path = request.nextUrl.pathname;
 
-  // Redirect logged-in users away from login/register
   if (user && (path === "/login" || path === "/register")) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
-  // Protect dashboard and creator routes
   if (!user && (path.startsWith("/dashboard") || path.startsWith("/creator"))) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
