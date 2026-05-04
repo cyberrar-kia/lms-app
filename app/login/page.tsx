@@ -15,24 +15,38 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
     const supabase = createClient();
-    const { error: authError } = await supabase.auth.signInWithPassword({
+
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
       email: form.email,
       password: form.password,
     });
+
     if (authError) {
       setLoading(false);
       return setError("Invalid email or password.");
     }
-    // Check profile status
+
+    // Use the user id from auth directly — don't rely on RLS query
+    const userId = authData.user.id;
+
     const { data: profile } = await supabase
       .from("profiles")
       .select("role, status")
+      .eq("id", userId)
       .single();
+
     setLoading(false);
-    if (!profile) return setError("Account not found.");
+
+    if (!profile) {
+      // Profile might not exist yet — sign out and show error
+      await supabase.auth.signOut();
+      return setError("Profile not found. Please contact support.");
+    }
+
     if (profile.role === "creator") return router.push("/creator");
     if (profile.status === "approved") return router.push("/dashboard");
     if (profile.status === "rejected") return setError("Your application was not approved. Contact support.");
+    
     setError("Your account is still under review. You'll receive an email once approved.");
   };
 
