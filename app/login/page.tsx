@@ -1,11 +1,9 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { loginAction } from "@/app/actions/auth";
 import Link from "next/link";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -14,35 +12,11 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const supabase = createClient();
-
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-      email: form.email,
-      password: form.password,
-    });
-
-    if (authError) {
+    const result = await loginAction(form.email, form.password);
+    if (result?.error) {
+      setError(result.error);
       setLoading(false);
-      return setError("Invalid email or password.");
     }
-
-    // Pass access token directly to bypass cookie timing issues
-    const res = await fetch("/api/auth/profile", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ access_token: authData.session?.access_token }),
-    });
-
-    const data = await res.json();
-    setLoading(false);
-
-    if (!data.profile) return setError("Profile not found. Contact support.");
-
-    if (data.profile.role === "creator") return router.push("/creator");
-    if (data.profile.status === "approved") return router.push("/dashboard");
-    if (data.profile.status === "rejected") return setError("Your application was not approved.");
-
-    router.push("/pending");
   };
 
   return (
