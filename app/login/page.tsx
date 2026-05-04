@@ -16,7 +16,7 @@ export default function LoginPage() {
     setLoading(true);
     const supabase = createClient();
 
-    const { error: authError } = await supabase.auth.signInWithPassword({
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
       email: form.email,
       password: form.password,
     });
@@ -26,8 +26,13 @@ export default function LoginPage() {
       return setError("Invalid email or password.");
     }
 
-    // Fetch profile via server API route (bypasses RLS using service role)
-    const res = await fetch("/api/auth/profile");
+    // Pass access token directly to bypass cookie timing issues
+    const res = await fetch("/api/auth/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_token: authData.session?.access_token }),
+    });
+
     const data = await res.json();
     setLoading(false);
 
