@@ -3,12 +3,12 @@ import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { sendPaymentConfirmationEmail } from "@/lib/resend";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
 export async function POST(req: NextRequest) {
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
   const body = await req.text();
   const signature = req.headers.get("x-paystack-signature");
 
@@ -27,7 +27,6 @@ export async function POST(req: NextRequest) {
     const { reference, customer } = event.data;
     const email = customer.email;
 
-    // Record payment
     await supabase.from("payments").upsert({
       paystack_reference: reference,
       amount: event.data.amount,
@@ -36,7 +35,6 @@ export async function POST(req: NextRequest) {
       verified_at: new Date().toISOString(),
     });
 
-    // Auto-approve user if they exist
     const { data: profile } = await supabase
       .from("profiles")
       .select("id, full_name, status")
@@ -46,9 +44,6 @@ export async function POST(req: NextRequest) {
     if (profile) {
       await supabase.from("profiles").update({ status: "approved", paid: true, payment_ref: reference }).eq("id", profile.id);
       await sendPaymentConfirmationEmail(email, profile.full_name);
-    } else {
-      // Store payment_ref so register page can auto-approve
-      await supabase.from("payments").update({ user_id: null }).eq("paystack_reference", reference);
     }
   }
 
