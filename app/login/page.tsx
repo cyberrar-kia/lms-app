@@ -1,11 +1,9 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -16,18 +14,41 @@ export default function LoginPage() {
     setLoading(true);
 
     const supabase = createClient();
-    const { error: authError } = await supabase.auth.signInWithPassword({
+
+    // Step 1: Sign in — sets session in browser immediately
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
       email: form.email,
       password: form.password,
     });
 
-    if (authError) {
+    if (authError || !authData.user) {
       setLoading(false);
       return setError("Invalid email or password.");
     }
 
-    // Session cookie is now set — let the server handle role-based redirect
-    router.push("/auth/callback");
+    // Step 2: Query profile — session is already set so RLS auth.uid() works
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("role, status")
+      .eq("id", authData.user.id)
+      .single();
+
+    if (profileError || !profile) {
+      setLoading(false);
+      return setError("Could not load your profile. Please try again.");
+    }
+
+    // Step 3: Redirect using full page navigation (ensures cookie is sent)
+    if (profile.role === "creator") {
+      window.location.href = "/creator";
+    } else if (profile.status === "approved") {
+      window.location.href = "/dashboard";
+    } else if (profile.status === "rejected") {
+      setLoading(false);
+      setError("Your application was not approved. Contact support.");
+    } else {
+      window.location.href = "/pending";
+    }
   };
 
   return (

@@ -1,25 +1,19 @@
-import { createClient } from "@supabase/supabase-js";
-import { createClient as createServerClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
 export default async function CreatorLayout({ children }: { children: React.ReactNode }) {
-  const supabase = await createServerClient();
+  const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const admin = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-
-  const { data: profile } = await admin
+  const { data: profile } = await supabase
     .from("profiles")
     .select("role")
     .eq("id", user.id)
     .single();
 
-  if (!profile || profile.role !== "creator") redirect("/dashboard");
+  if (!profile || profile.role !== "creator") redirect("/login");
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -33,9 +27,7 @@ export default async function CreatorLayout({ children }: { children: React.Reac
           </nav>
         </div>
         <form action="/auth/signout" method="post">
-          <button type="submit" className="text-sm text-gray-500 hover:text-red-500 transition-colors">
-            Log out
-          </button>
+          <button className="text-sm text-gray-500 hover:text-red-500 transition-colors">Log out</button>
         </form>
       </header>
       <main className="flex-1 p-8 max-w-6xl mx-auto w-full">{children}</main>
