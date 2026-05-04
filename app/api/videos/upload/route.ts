@@ -38,4 +38,3 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ success: true });
 }
 
-export const config = { api: { bodyParser: false } };
