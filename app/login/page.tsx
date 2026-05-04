@@ -1,9 +1,11 @@
 "use client";
 import { useState } from "react";
-import { loginAction } from "@/app/actions/auth";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 
 export default function LoginPage() {
+  const router = useRouter();
   const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -12,11 +14,20 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const result = await loginAction(form.email, form.password);
-    if (result?.error) {
-      setError(result.error);
+
+    const supabase = createClient();
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email: form.email,
+      password: form.password,
+    });
+
+    if (authError) {
       setLoading(false);
+      return setError("Invalid email or password.");
     }
+
+    // Session cookie is now set — let the server handle role-based redirect
+    router.push("/auth/callback");
   };
 
   return (
