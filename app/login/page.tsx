@@ -16,7 +16,7 @@ export default function LoginPage() {
     setLoading(true);
     const supabase = createClient();
 
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    const { error: authError } = await supabase.auth.signInWithPassword({
       email: form.email,
       password: form.password,
     });
@@ -26,28 +26,18 @@ export default function LoginPage() {
       return setError("Invalid email or password.");
     }
 
-    // Use the user id from auth directly — don't rely on RLS query
-    const userId = authData.user.id;
-
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("role, status")
-      .eq("id", userId)
-      .single();
-
+    // Fetch profile via server API route (bypasses RLS using service role)
+    const res = await fetch("/api/auth/profile");
+    const data = await res.json();
     setLoading(false);
 
-    if (!profile) {
-      // Profile might not exist yet — sign out and show error
-      await supabase.auth.signOut();
-      return setError("Profile not found. Please contact support.");
-    }
+    if (!data.profile) return setError("Profile not found. Contact support.");
 
-    if (profile.role === "creator") return router.push("/creator");
-    if (profile.status === "approved") return router.push("/dashboard");
-    if (profile.status === "rejected") return setError("Your application was not approved. Contact support.");
-    
-    setError("Your account is still under review. You'll receive an email once approved.");
+    if (data.profile.role === "creator") return router.push("/creator");
+    if (data.profile.status === "approved") return router.push("/dashboard");
+    if (data.profile.status === "rejected") return setError("Your application was not approved.");
+
+    router.push("/pending");
   };
 
   return (
