@@ -6,8 +6,15 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: profile } = await supabase.from("profiles").select("status, role").eq("id", user.id).single();
-  if (!profile || profile.status !== "approved") redirect("/pending");
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("status, role")
+    .eq("id", user.id)
+    .single();
+
+  if (!profile) redirect("/login");
+  if (profile.role === "creator") redirect("/creator");
+  if (profile.status !== "approved") redirect("/pending");
 
   return <>{children}</>;
 }
