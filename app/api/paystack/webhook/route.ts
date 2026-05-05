@@ -22,10 +22,11 @@ export async function POST(req: NextRequest) {
 
   const event = JSON.parse(body);
 
-  // ─── INITIAL PAYMENT (charge.success) ───────────────────────────────────
+  // ─── ANY SUCCESSFUL CHARGE ───────────────────────────────────────────────
   if (event.event === "charge.success") {
-    const { reference, customer } = event.data;
+    const { reference, customer, metadata } = event.data;
     const email = customer.email;
+    const source = metadata?.source;
 
     await supabase.from("payments").upsert({
       paystack_reference: reference,
@@ -42,23 +43,47 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (profile) {
-      await supabase.from("profiles").update({
+      const updates: Record<string, any> = {
         status: "approved",
         paid: true,
         payment_ref: reference,
         subscription_status: "active",
-      }).eq("id", profile.id);
+      };
 
-      try { await sendPaymentConfirmationEmail(email, profile.full_name); } catch (e) { console.error(e); }
+      // If this is a renewal, update next payment date (30 days from now)
+      if (source === "subscription_renewal") {
+        const nextDate = new Date();
+        nextDate.setDate(nextDate.getDate() + 30);
+        updates.next_payment_date = nextDate.toISOString();
+      }
+
+      await supabase.from("profiles").update(updates).eq("id", profile.id);
+
+      try {
+        await sendPaymentConfirmationEmail(email, profile.full_name);
+      } catch (e) { console.error(e); }
     }
   }
 
-  // ─── MONTHLY RENEWAL SUCCESS (invoice.payment) ──────────────────────────
+  // ─── SUBSCRIPTION CREATED ────────────────────────────────────────────────
+  if (event.event === "subscription.create") {
+    const email = event.data.customer?.email;
+    const subscriptionCode = event.data.subscription_code;
+    const nextPaymentDate = event.data.next_payment_date;
+    if (email) {
+      await supabase.from("profiles").update({
+        subscription_code: subscriptionCode,
+        subscription_status: "active",
+        next_payment_date: nextPaymentDate || null,
+      }).eq("email", email);
+    }
+  }
+
+  // ─── MONTHLY RENEWAL ─────────────────────────────────────────────────────
   if (event.event === "invoice.payment") {
     const email = event.data.customer?.email;
     const subscriptionCode = event.data.subscription_code;
     const nextPaymentDate = event.data.subscription?.next_payment_date;
-
     if (email) {
       await supabase.from("profiles").update({
         status: "approved",
@@ -69,25 +94,9 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ─── SUBSCRIPTION CREATED ────────────────────────────────────────────────
-  if (event.event === "subscription.create") {
-    const email = event.data.customer?.email;
-    const subscriptionCode = event.data.subscription_code;
-    const nextPaymentDate = event.data.next_payment_date;
-
-    if (email) {
-      await supabase.from("profiles").update({
-        subscription_code: subscriptionCode,
-        subscription_status: "active",
-        next_payment_date: nextPaymentDate || null,
-      }).eq("email", email);
-    }
-  }
-
-  // ─── SUBSCRIPTION DISABLED / PAYMENT FAILED ─────────────────────────────
+  // ─── SUBSCRIPTION EXPIRED / PAYMENT FAILED ───────────────────────────────
   if (event.event === "subscription.disable" || event.event === "invoice.payment_failed") {
     const email = event.data.customer?.email;
-
     if (email) {
       await supabase.from("profiles").update({
         status: "pending",

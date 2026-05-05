@@ -14,6 +14,7 @@ export default function DashboardPage() {
   const [totalLessons, setTotalLessons] = useState(0);
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [renewing, setRenewing] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -41,7 +42,7 @@ export default function DashboardPage() {
       const { data: mods } = await supabase.from("modules").select("id, title").eq("published", true).order("order_index");
       if (mods && mods.length > 0) {
         const { data: vids } = await supabase.from("videos").select("id, module_id").eq("published", true).in("module_id", mods.map(m => m.id));
-        setModules(mods.map(m => ({ ...m, lessons: (vids || []).filter(v => v.module_id === m.id) })));
+        setModules(mods.map(m => ({ ...m, lessons: (vids || []).filter((v: any) => v.module_id === m.id) })));
         setTotalLessons((vids || []).length);
       }
       setLoading(false);
@@ -53,6 +54,18 @@ export default function DashboardPage() {
     const supabase = createClient();
     await supabase.auth.signOut();
     window.location.href = "/login";
+  };
+
+  const handleRenew = async () => {
+    setRenewing(true);
+    const res = await fetch("/api/paystack/renew", { method: "POST" });
+    const data = await res.json();
+    if (data.authorization_url) {
+      window.location.href = data.authorization_url;
+    } else {
+      alert("Could not initialize renewal. Please try again.");
+      setRenewing(false);
+    }
   };
 
   if (loading) return (
@@ -98,17 +111,16 @@ export default function DashboardPage() {
               </div>
             </div>
             {subExpired && (
-              <a href="/#pricing"
-                className="bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors">
-                Renew — ₦3,000
-              </a>
+              <button onClick={handleRenew} disabled={renewing}
+                className="bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors disabled:opacity-50">
+                {renewing ? "Loading..." : "Renew — ₦3,000"}
+              </button>
             )}
           </div>
         )}
 
         {course ? (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-            {/* Cover */}
             <div style={{ height: "208px", overflow: "hidden", position: "relative" }}>
               {coverUrl ? (
                 <img src={coverUrl} alt={course.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
@@ -159,10 +171,10 @@ export default function DashboardPage() {
                     <p className="text-red-700 font-semibold mb-1">Your subscription has expired</p>
                     <p className="text-red-500 text-sm">Renew for ₦3,000/month to regain full access</p>
                   </div>
-                  <a href="/#pricing"
-                    className="block w-full bg-red-600 hover:bg-red-700 text-white text-center font-bold text-lg py-4 rounded-2xl transition-colors">
-                    Renew Subscription — ₦3,000
-                  </a>
+                  <button onClick={handleRenew} disabled={renewing}
+                    className="block w-full bg-red-600 hover:bg-red-700 text-white text-center font-bold text-lg py-4 rounded-2xl transition-colors disabled:opacity-50">
+                    {renewing ? "Redirecting to payment..." : "Renew Subscription — ₦3,000"}
+                  </button>
                 </div>
               ) : (
                 <Link href="/dashboard/course"
