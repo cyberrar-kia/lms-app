@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
+import Image from "next/image";
 
 type Lesson = { id: string; title: string; description: string; storage_path: string; order_index: number; module_id: string };
 type Module = { id: string; title: string; description: string; order_index: number; published: boolean; lessons: Lesson[] };
-type CourseSettings = { id: string; title: string; description: string; price: number };
+type CourseSettings = { id: string; title: string; description: string; price: number; thumbnail_url: string | null };
 
 export default function CurriculumPage() {
   const [course, setCourse] = useState<CourseSettings | null>(null);
@@ -12,12 +13,14 @@ export default function CurriculumPage() {
   const [expandedModule, setExpandedModule] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadingCover, setUploadingCover] = useState(false);
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [newModuleTitle, setNewModuleTitle] = useState("");
   const [addingModule, setAddingModule] = useState(false);
   const [lessonForms, setLessonForms] = useState<Record<string, { title: string; description: string; uploading: boolean; progress: number; error: string }>>({});
   const [showLessonForm, setShowLessonForm] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const coverInputRef = useRef<HTMLInputElement>(null);
   const [activeUploadModuleId, setActiveUploadModuleId] = useState<string | null>(null);
 
   function showMsg(type: "success" | "error", text: string) {
@@ -49,11 +52,6 @@ export default function CurriculumPage() {
 
   useEffect(() => { loadAll(); }, []);
 
-  function showMsg2(type: "success" | "error", text: string) {
-    setMsg({ type, text });
-    setTimeout(() => setMsg(null), 5000);
-  }
-
   function initLessonForm(moduleId: string) {
     setLessonForms(prev => ({
       ...prev,
@@ -64,17 +62,11 @@ export default function CurriculumPage() {
   }
 
   function updateLessonForm(moduleId: string, field: string, value: string) {
-    setLessonForms(prev => ({
-      ...prev,
-      [moduleId]: { ...prev[moduleId], [field]: value }
-    }));
+    setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], [field]: value } }));
   }
 
   function resetLessonForm(moduleId: string) {
-    setLessonForms(prev => ({
-      ...prev,
-      [moduleId]: { title: "", description: "", uploading: false, progress: 0, error: "" }
-    }));
+    setLessonForms(prev => ({ ...prev, [moduleId]: { title: "", description: "", uploading: false, progress: 0, error: "" } }));
     setShowLessonForm(null);
   }
 
@@ -90,15 +82,49 @@ export default function CurriculumPage() {
     else showMsg("success", "Course settings saved!");
   }
 
+  async function uploadCoverImage(file: File) {
+    if (!course) return;
+    const MAX = 5 * 1024 * 1024;
+    if (file.size > MAX) { showMsg("error", "Image must be under 5MB."); return; }
+
+    setUploadingCover(true);
+    const supabase = createClient();
+    const ext = file.name.split(".").pop();
+    const fileName = `cover-${Date.now()}.${ext}`;
+
+    // Delete old cover if exists
+    if (course.thumbnail_url) {
+      const oldPath = course.thumbnail_url.split("/").pop();
+      if (oldPath) await supabase.storage.from("course-covers").remove([oldPath]);
+    }
+
+    const { error: uploadError } = await supabase.storage
+      .from("course-covers")
+      .upload(fileName, file, { contentType: file.type, upsert: true });
+
+    if (uploadError) {
+      setUploadingCover(false);
+      showMsg("error", `Cover upload failed: ${uploadError.message}`);
+      return;
+    }
+
+    const { data: { publicUrl } } = supabase.storage.from("course-covers").getPublicUrl(fileName);
+
+    const { error: dbError } = await supabase.from("course_settings")
+      .update({ thumbnail_url: publicUrl })
+      .eq("id", course.id);
+
+    setUploadingCover(false);
+    if (dbError) { showMsg("error", dbError.message); return; }
+    setCourse(prev => prev ? { ...prev, thumbnail_url: publicUrl } : prev);
+    showMsg("success", "Cover image updated!");
+  }
+
   async function addModule() {
     if (!newModuleTitle.trim()) return;
     setAddingModule(true);
     const supabase = createClient();
-    const { error } = await supabase.from("modules").insert({
-      title: newModuleTitle.trim(),
-      order_index: modules.length,
-      published: true,
-    });
+    const { error } = await supabase.from("modules").insert({ title: newModuleTitle.trim(), order_index: modules.length, published: true });
     setAddingModule(false);
     if (error) showMsg("error", error.message);
     else { setNewModuleTitle(""); showMsg("success", "Module added!"); await loadAll(); }
@@ -108,9 +134,7 @@ export default function CurriculumPage() {
     if (!confirm("Delete this module and all its lessons?")) return;
     const supabase = createClient();
     const mod = modules.find(m => m.id === id);
-    if (mod?.lessons?.length) {
-      await supabase.storage.from("course-videos").remove(mod.lessons.map(l => l.storage_path));
-    }
+    if (mod?.lessons?.length) await supabase.storage.from("course-videos").remove(mod.lessons.map(l => l.storage_path));
     await supabase.from("videos").delete().eq("module_id", id);
     await supabase.from("modules").delete().eq("id", id);
     showMsg("success", "Module deleted.");
@@ -136,34 +160,20 @@ export default function CurriculumPage() {
     if (!file || !moduleId) return;
     e.target.value = "";
 
-    const MAX_SIZE = 500 * 1024 * 1024; // 500MB
-    if (file.size > MAX_SIZE) {
-      showMsg("error", "File too large. Maximum size is 500MB.");
-      return;
-    }
+    if (file.size > 500 * 1024 * 1024) { showMsg("error", "File too large. Maximum size is 500MB."); return; }
 
     const form = lessonForms[moduleId];
     if (!form?.title?.trim()) { showMsg("error", "Please enter a lesson title first."); return; }
 
-    // Set uploading
-    setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: true, progress: 5, error: "" } }));
+    setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: true, progress: 20, error: "" } }));
 
     const supabase = createClient();
     const ext = file.name.split(".").pop();
     const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
     try {
-      // Upload using upload with upsert false
-      // For large files we use the standard upload
-      setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], progress: 20 } }));
-
       const { error: uploadError } = await supabase.storage
-        .from("course-videos")
-        .upload(fileName, file, {
-          contentType: file.type,
-          upsert: false,
-          // cacheControl: "3600",
-        });
+        .from("course-videos").upload(fileName, file, { contentType: file.type, upsert: false });
 
       if (uploadError) {
         setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: false, progress: 0, error: uploadError.message } }));
@@ -191,11 +201,10 @@ export default function CurriculumPage() {
 
       setLessonForms(prev => ({ ...prev, [moduleId]: { title: "", description: "", uploading: false, progress: 100, error: "" } }));
       setTimeout(() => setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], progress: 0 } })), 1500);
-      showMsg("success", `"${form.title}" uploaded successfully! Add another lesson or close the form.`);
+      showMsg("success", `"${form.title}" uploaded! Add another or cancel to close.`);
       await loadAll();
-
     } catch (err: any) {
-      setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: false, progress: 0, error: err.message || "Unknown error" } }));
+      setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: false, progress: 0, error: err.message } }));
       showMsg("error", `Error: ${err.message}`);
     }
   }
@@ -226,33 +235,74 @@ export default function CurriculumPage() {
         </div>
       )}
 
+      {/* Hidden file inputs */}
       <input ref={fileInputRef} type="file" accept="video/mp4,video/webm,video/quicktime,video/mov" className="hidden" onChange={handleFileSelected} />
+      <input ref={coverInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) uploadCoverImage(f); e.target.value = ""; }} />
 
       {/* COURSE SETTINGS */}
       {course && (
         <div className="bg-white border border-gray-100 rounded-2xl p-8 mb-8">
           <h2 className="text-lg font-bold mb-6">📋 Course Settings</h2>
-          <div className="space-y-4">
+
+          {/* Cover Image */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-3">Course Cover Image</label>
+            <div className="flex items-start gap-5">
+              {/* Preview */}
+              <div
+                onClick={() => coverInputRef.current?.click()}
+                className="w-48 h-28 rounded-2xl overflow-hidden border-2 border-dashed border-gray-200 hover:border-brand cursor-pointer transition-colors flex-shrink-0 relative group">
+                {course.thumbnail_url ? (
+                  <>
+                    <Image src={course.thumbnail_url} alt="Course cover" fill className="object-cover" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <p className="text-white text-xs font-medium">Change Image</p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="w-full h-full bg-gray-50 flex flex-col items-center justify-center gap-2">
+                    {uploadingCover ? (
+                      <div className="animate-pulse text-brand text-xs">Uploading...</div>
+                    ) : (
+                      <>
+                        <span className="text-2xl">🖼️</span>
+                        <p className="text-xs text-gray-400 text-center px-2">Click to upload cover</p>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="text-sm text-gray-500 pt-1">
+                <p className="font-medium text-gray-700 mb-1">Course cover image</p>
+                <p>This appears on the student dashboard as the course card banner.</p>
+                <p className="mt-1 text-xs text-gray-400">Recommended: 1280×720px · JPG or PNG · Max 5MB</p>
+                <button onClick={() => coverInputRef.current?.click()} disabled={uploadingCover}
+                  className="mt-3 text-xs bg-brand text-white px-4 py-2 rounded-lg hover:bg-brand-dark transition-colors disabled:opacity-50">
+                  {uploadingCover ? "Uploading..." : course.thumbnail_url ? "Change Cover" : "Upload Cover"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t border-gray-100 pt-6 space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Course Title *</label>
               <input type="text" value={course.title}
                 onChange={e => setCourse({ ...course, title: e.target.value })}
-                className="w-full border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-brand"
-              />
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-brand" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Course Description</label>
               <textarea value={course.description || ""} rows={3}
                 onChange={e => setCourse({ ...course, description: e.target.value })}
-                className="w-full border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-brand resize-none"
-              />
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-brand resize-none" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Price (₦)</label>
               <input type="number" value={course.price}
                 onChange={e => setCourse({ ...course, price: parseInt(e.target.value) || 0 })}
-                className="w-40 border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-brand"
-              />
+                className="w-40 border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-brand" />
             </div>
             <button onClick={saveCourse} disabled={saving}
               className="bg-brand hover:bg-brand-dark text-white font-semibold px-6 py-3 rounded-xl transition-colors disabled:opacity-50">
@@ -331,23 +381,15 @@ export default function CurriculumPage() {
                       <div className="border border-brand/20 rounded-xl p-4 bg-brand-light/20 space-y-3">
                         <p className="text-sm font-semibold text-brand">New Lesson</p>
                         <input type="text" placeholder="Lesson title *"
-                          value={form.title}
-                          onChange={e => updateLessonForm(mod.id, "title", e.target.value)}
-                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-brand"
-                        />
+                          value={form.title} onChange={e => updateLessonForm(mod.id, "title", e.target.value)}
+                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-brand" />
                         <input type="text" placeholder="Description (optional)"
-                          value={form.description}
-                          onChange={e => updateLessonForm(mod.id, "description", e.target.value)}
-                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-brand"
-                        />
-
-                        {form.error && (
-                          <p className="text-red-500 text-xs">❌ {form.error}</p>
-                        )}
-
+                          value={form.description} onChange={e => updateLessonForm(mod.id, "description", e.target.value)}
+                          className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-brand" />
+                        {form.error && <p className="text-red-500 text-xs">❌ {form.error}</p>}
                         {form.uploading ? (
                           <div className="space-y-2">
-                            <div className="flex items-center justify-between">
+                            <div className="flex justify-between">
                               <p className="text-sm text-brand font-medium">Uploading video...</p>
                               <p className="text-xs text-gray-400">{form.progress}%</p>
                             </div>
@@ -366,9 +408,7 @@ export default function CurriculumPage() {
                             📹 Select Video & Upload
                           </button>
                         )}
-
-                        <button onClick={() => resetLessonForm(mod.id)}
-                          disabled={form.uploading}
+                        <button onClick={() => resetLessonForm(mod.id)} disabled={form.uploading}
                           className="w-full text-sm text-gray-400 hover:text-gray-600 py-1 disabled:opacity-40">
                           {form.uploading ? "Upload in progress..." : "Cancel"}
                         </button>
@@ -385,11 +425,9 @@ export default function CurriculumPage() {
           <p className="text-sm font-semibold text-gray-700 mb-3">Add New Module</p>
           <div className="flex gap-3">
             <input type="text" placeholder="e.g. Introduction to the Course"
-              value={newModuleTitle}
-              onChange={e => setNewModuleTitle(e.target.value)}
+              value={newModuleTitle} onChange={e => setNewModuleTitle(e.target.value)}
               onKeyDown={e => e.key === "Enter" && addModule()}
-              className="flex-1 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand"
-            />
+              className="flex-1 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand" />
             <button onClick={addModule} disabled={addingModule || !newModuleTitle.trim()}
               className="bg-brand hover:bg-brand-dark text-white font-semibold px-6 py-3 rounded-xl transition-colors disabled:opacity-50 whitespace-nowrap">
               {addingModule ? "Adding..." : "+ Add Module"}
