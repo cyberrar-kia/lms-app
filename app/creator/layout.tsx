@@ -22,8 +22,8 @@ export default async function CreatorLayout({ children }: { children: React.Reac
           <span className="font-bold text-xl text-brand">LearnHub Creator</span>
           <nav className="flex gap-6 text-sm">
             <Link href="/creator" className="text-gray-600 hover:text-brand transition-colors">Overview</Link>
+            <Link href="/creator/curriculum" className="text-gray-600 hover:text-brand transition-colors">Course Builder</Link>
             <Link href="/creator/students" className="text-gray-600 hover:text-brand transition-colors">Students</Link>
-            <Link href="/creator/upload" className="text-gray-600 hover:text-brand transition-colors">Upload Video</Link>
           </nav>
         </div>
         <form action="/auth/signout" method="post">
