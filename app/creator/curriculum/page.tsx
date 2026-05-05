@@ -255,7 +255,7 @@ export default function CurriculumPage() {
                 className="w-48 h-28 rounded-2xl overflow-hidden border-2 border-dashed border-gray-200 hover:border-brand cursor-pointer transition-colors flex-shrink-0 relative group">
                 {course.thumbnail_url ? (
                   <>
-                    <img src={course.thumbnail_url} alt="Course cover" className="w-full h-full object-cover" />
+                    <img src={course.thumbnail_url} alt="Course cover" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display="none"; }} />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <p className="text-white text-xs font-medium">Change Image</p>
                     </div>

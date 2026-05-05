@@ -65,7 +65,7 @@ export default function DashboardPage() {
             {/* Cover Image or Gradient Fallback */}
             <div className="relative h-52 overflow-hidden">
               {course.thumbnail_url ? (
-                <img src={course.thumbnail_url} alt={course.title} className="w-full h-full object-cover" />
+                <img src={course.thumbnail_url} alt={course.title} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display="none"; }} />
               ) : (
                 <div className="w-full h-full bg-gradient-to-br from-brand to-brand-dark flex items-center justify-center">
                   <div className="text-center">
