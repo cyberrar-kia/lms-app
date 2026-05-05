@@ -10,15 +10,15 @@ export default function StudentsPage() {
   const [loading, setLoading] = useState(true);
   const [actionId, setActionId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
 
   async function load() {
     const supabase = createClient();
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("profiles")
       .select("*")
       .eq("role", "student")
       .order("created_at", { ascending: false });
-    if (error) console.error("Load error:", error);
     setStudents(data || []);
     setLoading(false);
   }
@@ -27,22 +27,24 @@ export default function StudentsPage() {
 
   const handleAction = async (id: string, action: "approved" | "rejected") => {
     setError("");
+    setSuccessMsg("");
     setActionId(id);
-    try {
-      const res = await fetch("/api/auth/approve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: id, action }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(`Failed: ${data.error || res.status}`);
-      } else {
-        await load();
-      }
-    } catch (err: any) {
-      setError(`Error: ${err.message}`);
+
+    const supabase = createClient();
+
+    // Update directly from client — creator session handles auth
+    const { error: updateError } = await supabase
+      .from("profiles")
+      .update({ status: action })
+      .eq("id", id);
+
+    if (updateError) {
+      setError(`Failed: ${updateError.message}`);
+    } else {
+      setSuccessMsg(`Student ${action} successfully.`);
+      await load();
     }
+
     setActionId(null);
   };
 
@@ -54,9 +56,10 @@ export default function StudentsPage() {
       <p className="text-gray-500 mb-6">Manage student access to your course.</p>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6 text-sm">
-          {error}
-        </div>
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-4 text-sm">{error}</div>
+      )}
+      {successMsg && (
+        <div className="bg-green-50 border border-green-200 text-green-700 rounded-xl p-4 mb-4 text-sm">✅ {successMsg}</div>
       )}
 
       <div className="flex gap-2 mb-6">
