@@ -5,6 +5,7 @@ import Link from "next/link";
 
 type CourseSettings = { id: string; title: string; description: string; price: number; thumbnail_url: string | null };
 type Module = { id: string; title: string; lessons: { id: string }[] };
+type Profile = { full_name: string; subscription_status: string | null; next_payment_date: string | null; paid: boolean };
 
 export default function DashboardPage() {
   const [course, setCourse] = useState<CourseSettings | null>(null);
@@ -12,27 +13,31 @@ export default function DashboardPage() {
   const [modules, setModules] = useState<Module[]>([]);
   const [totalLessons, setTotalLessons] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [userName, setUserName] = useState("");
+  const [profile, setProfile] = useState<Profile | null>(null);
 
   useEffect(() => {
     async function load() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user.id).single();
-        if (profile) setUserName(profile.full_name.split(" ")[0]);
+        const { data: p } = await supabase
+          .from("profiles")
+          .select("full_name, subscription_status, next_payment_date, paid")
+          .eq("id", user.id)
+          .single();
+        if (p) setProfile(p);
       }
+
       const { data: cs } = await supabase.from("course_settings").select("*").single();
       if (cs) {
         setCourse(cs);
-        // Generate signed URL for cover image
         if (cs.thumbnail_url) {
           const { data: signedData } = await supabase.storage
-            .from("course-covers")
-            .createSignedUrl(cs.thumbnail_url, 3600);
+            .from("course-covers").createSignedUrl(cs.thumbnail_url, 3600);
           if (signedData?.signedUrl) setCoverUrl(signedData.signedUrl);
         }
       }
+
       const { data: mods } = await supabase.from("modules").select("id, title").eq("published", true).order("order_index");
       if (mods && mods.length > 0) {
         const { data: vids } = await supabase.from("videos").select("id, module_id").eq("published", true).in("module_id", mods.map(m => m.id));
@@ -56,17 +61,51 @@ export default function DashboardPage() {
     </div>
   );
 
+  const userName = profile?.full_name?.split(" ")[0] || "";
+  const nextPayment = profile?.next_payment_date
+    ? new Date(profile.next_payment_date).toLocaleDateString("en-NG", { day: "numeric", month: "long", year: "numeric" })
+    : null;
+  const subExpired = profile?.subscription_status === "expired";
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <header className="bg-white border-b border-gray-100 px-6 py-4 flex justify-between items-center">
         <span className="font-bold text-xl text-brand">LearnHub</span>
         <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-red-500 transition-colors">Log out</button>
       </header>
+
       <main className="flex-1 max-w-4xl mx-auto w-full px-6 py-12">
         <div className="mb-10">
           <h1 className="text-3xl font-bold text-gray-900">Welcome back{userName ? `, ${userName}` : ""}! 👋</h1>
           <p className="text-gray-500 mt-2">Ready to continue learning? Pick up where you left off.</p>
         </div>
+
+        {/* Subscription Status Banner */}
+        {profile?.paid && (
+          <div className={`rounded-2xl p-4 mb-6 flex items-center justify-between ${subExpired ? "bg-red-50 border border-red-200" : "bg-green-50 border border-green-200"}`}>
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">{subExpired ? "⚠️" : "✅"}</span>
+              <div>
+                <p className={`font-semibold text-sm ${subExpired ? "text-red-700" : "text-green-700"}`}>
+                  {subExpired ? "Subscription Expired" : "Subscription Active"}
+                </p>
+                {nextPayment && !subExpired && (
+                  <p className="text-xs text-green-600">Next renewal: {nextPayment}</p>
+                )}
+                {subExpired && (
+                  <p className="text-xs text-red-600">Renew to continue accessing your course</p>
+                )}
+              </div>
+            </div>
+            {subExpired && (
+              <a href="/#pricing"
+                className="bg-red-600 hover:bg-red-700 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors">
+                Renew — ₦3,000
+              </a>
+            )}
+          </div>
+        )}
+
         {course ? (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
             {/* Cover */}
@@ -114,11 +153,26 @@ export default function DashboardPage() {
                 </div>
               )}
 
-              <Link href="/dashboard/course"
-                className="block w-full bg-brand hover:bg-brand-dark text-white text-center font-bold text-lg py-4 rounded-2xl transition-colors shadow-lg shadow-brand/20">
-                {totalLessons === 0 ? "Preview Course →" : "Start Course →"}
-              </Link>
-              <p className="text-center text-xs text-gray-400 mt-4">You have full lifetime access to this course</p>
+              {subExpired ? (
+                <div className="space-y-3">
+                  <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-center">
+                    <p className="text-red-700 font-semibold mb-1">Your subscription has expired</p>
+                    <p className="text-red-500 text-sm">Renew for ₦3,000/month to regain full access</p>
+                  </div>
+                  <a href="/#pricing"
+                    className="block w-full bg-red-600 hover:bg-red-700 text-white text-center font-bold text-lg py-4 rounded-2xl transition-colors">
+                    Renew Subscription — ₦3,000
+                  </a>
+                </div>
+              ) : (
+                <Link href="/dashboard/course"
+                  className="block w-full bg-brand hover:bg-brand-dark text-white text-center font-bold text-lg py-4 rounded-2xl transition-colors shadow-lg shadow-brand/20">
+                  {totalLessons === 0 ? "Preview Course →" : "Start Course →"}
+                </Link>
+              )}
+              <p className="text-center text-xs text-gray-400 mt-4">
+                {subExpired ? "Renew to restore access to all lessons" : "You have full access to this course"}
+              </p>
             </div>
           </div>
         ) : (
