@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
-import Image from "next/image";
+
 
 type CourseSettings = { id: string; title: string; description: string; price: number; thumbnail_url: string | null };
 type Module = { id: string; title: string; lessons: { id: string }[] };
@@ -65,7 +65,7 @@ export default function DashboardPage() {
             {/* Cover Image or Gradient Fallback */}
             <div className="relative h-52 overflow-hidden">
               {course.thumbnail_url ? (
-                <Image src={course.thumbnail_url} alt={course.title} fill className="object-cover" />
+                <img src={course.thumbnail_url} alt={course.title} className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full bg-gradient-to-br from-brand to-brand-dark flex items-center justify-center">
                   <div className="text-center">
