@@ -9,10 +9,16 @@ export default function StudentsPage() {
   const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [actionId, setActionId] = useState<string | null>(null);
+  const [error, setError] = useState("");
 
   async function load() {
     const supabase = createClient();
-    const { data } = await supabase.from("profiles").select("*").eq("role", "student").order("created_at", { ascending: false });
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("role", "student")
+      .order("created_at", { ascending: false });
+    if (error) console.error("Load error:", error);
     setStudents(data || []);
     setLoading(false);
   }
@@ -20,13 +26,23 @@ export default function StudentsPage() {
   useEffect(() => { load(); }, []);
 
   const handleAction = async (id: string, action: "approved" | "rejected") => {
+    setError("");
     setActionId(id);
-    await fetch("/api/auth/approve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: id, action }),
-    });
-    await load();
+    try {
+      const res = await fetch("/api/auth/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: id, action }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(`Failed: ${data.error || res.status}`);
+      } else {
+        await load();
+      }
+    } catch (err: any) {
+      setError(`Error: ${err.message}`);
+    }
     setActionId(null);
   };
 
@@ -36,6 +52,12 @@ export default function StudentsPage() {
     <div>
       <h1 className="text-3xl font-bold mb-2">Students</h1>
       <p className="text-gray-500 mb-6">Manage student access to your course.</p>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6 text-sm">
+          {error}
+        </div>
+      )}
 
       <div className="flex gap-2 mb-6">
         {["all", "pending", "approved", "rejected"].map(f => (
@@ -77,19 +99,21 @@ export default function StudentsPage() {
                       {s.status}
                     </span>
                   </td>
-                  <td className="px-6 py-4 flex gap-2">
-                    {s.status !== "approved" && (
-                      <button onClick={() => handleAction(s.id, "approved")} disabled={actionId === s.id}
-                        className="text-xs bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50">
-                        Approve
-                      </button>
-                    )}
-                    {s.status !== "rejected" && (
-                      <button onClick={() => handleAction(s.id, "rejected")} disabled={actionId === s.id}
-                        className="text-xs bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50">
-                        Reject
-                      </button>
-                    )}
+                  <td className="px-6 py-4">
+                    <div className="flex gap-2">
+                      {s.status !== "approved" && (
+                        <button onClick={() => handleAction(s.id, "approved")} disabled={actionId === s.id}
+                          className="text-xs bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50">
+                          {actionId === s.id ? "..." : "Approve"}
+                        </button>
+                      )}
+                      {s.status !== "rejected" && (
+                        <button onClick={() => handleAction(s.id, "rejected")} disabled={actionId === s.id}
+                          className="text-xs bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50">
+                          {actionId === s.id ? "..." : "Reject"}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

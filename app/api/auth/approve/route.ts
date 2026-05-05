@@ -1,28 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { createClient as createAdminClient } from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 
 export async function POST(req: NextRequest) {
-  // Verify creator is logged in
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const admin = createAdminClient(
+  const admin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
-
-  // Verify creator role
-  const { data: creator } = await admin
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
-
-  if (!creator || creator.role !== "creator") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const { user_id, action } = await req.json();
 
@@ -30,7 +13,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing user_id or action" }, { status: 400 });
   }
 
-  // Update the student status
+  if (!["approved", "rejected"].includes(action)) {
+    return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+  }
+
+  // Update student status directly
   const { error: updateError } = await admin
     .from("profiles")
     .update({ status: action })
@@ -40,7 +27,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });
   }
 
-  // Try to send email — non-fatal
+  // Try email — non-fatal
   try {
     const { data: profile } = await admin
       .from("profiles")
@@ -53,8 +40,8 @@ export async function POST(req: NextRequest) {
       if (action === "approved") await sendApprovalEmail(profile.email, profile.full_name);
       if (action === "rejected") await sendRejectionEmail(profile.email, profile.full_name);
     }
-  } catch (emailErr) {
-    console.error("Email failed (non-fatal):", emailErr);
+  } catch (err) {
+    console.error("Email failed (non-fatal):", err);
   }
 
   return NextResponse.json({ success: true });
