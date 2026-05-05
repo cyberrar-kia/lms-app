@@ -2,13 +2,13 @@
 import { useEffect, useState, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 
-
 type Lesson = { id: string; title: string; description: string; storage_path: string; order_index: number; module_id: string };
 type Module = { id: string; title: string; description: string; order_index: number; published: boolean; lessons: Lesson[] };
 type CourseSettings = { id: string; title: string; description: string; price: number; thumbnail_url: string | null };
 
 export default function CurriculumPage() {
   const [course, setCourse] = useState<CourseSettings | null>(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
   const [modules, setModules] = useState<Module[]>([]);
   const [expandedModule, setExpandedModule] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,35 +28,37 @@ export default function CurriculumPage() {
     setTimeout(() => setMsg(null), 5000);
   }
 
+  async function getSignedCoverUrl(path: string) {
+    const supabase = createClient();
+    const { data } = await supabase.storage.from("course-covers").createSignedUrl(path, 3600);
+    if (data?.signedUrl) setCoverPreviewUrl(data.signedUrl);
+  }
+
   async function loadAll() {
     const supabase = createClient();
     const [{ data: cs }, { data: mods }] = await Promise.all([
       supabase.from("course_settings").select("*").single(),
       supabase.from("modules").select("*").order("order_index"),
     ]);
-    if (cs) setCourse(cs);
-    if (mods && mods.length > 0) {
-      const { data: vids } = await supabase
-        .from("videos").select("*")
-        .in("module_id", mods.map((m: Module) => m.id))
-        .order("order_index");
-      setModules(mods.map((m: Module) => ({
-        ...m,
-        lessons: (vids || []).filter((v: Lesson) => v.module_id === m.id),
-      })));
-    } else {
-      setModules([]);
+    if (cs) {
+      setCourse(cs);
+      // thumbnail_url now stores the storage path, not public URL
+      if (cs.thumbnail_url) await getSignedCoverUrl(cs.thumbnail_url);
     }
+    if (mods && mods.length > 0) {
+      const { data: vids } = await supabase.from("videos").select("*")
+        .in("module_id", mods.map((m: Module) => m.id)).order("order_index");
+      setModules(mods.map((m: Module) => ({
+        ...m, lessons: (vids || []).filter((v: Lesson) => v.module_id === m.id),
+      })));
+    } else { setModules([]); }
     setLoading(false);
   }
 
   useEffect(() => { loadAll(); }, []);
 
   function initLessonForm(moduleId: string) {
-    setLessonForms(prev => ({
-      ...prev,
-      [moduleId]: prev[moduleId] || { title: "", description: "", uploading: false, progress: 0, error: "" }
-    }));
+    setLessonForms(prev => ({ ...prev, [moduleId]: prev[moduleId] || { title: "", description: "", uploading: false, progress: 0, error: "" } }));
     setShowLessonForm(moduleId);
     setExpandedModule(moduleId);
   }
@@ -84,40 +86,34 @@ export default function CurriculumPage() {
 
   async function uploadCoverImage(file: File) {
     if (!course) return;
-    const MAX = 5 * 1024 * 1024;
-    if (file.size > MAX) { showMsg("error", "Image must be under 5MB."); return; }
-
+    if (file.size > 5 * 1024 * 1024) { showMsg("error", "Image must be under 5MB."); return; }
     setUploadingCover(true);
     const supabase = createClient();
     const ext = file.name.split(".").pop();
-    const fileName = `cover-${Date.now()}.${ext}`;
-
-    // Delete old cover if exists
-    if (course.thumbnail_url) {
-      const oldPath = course.thumbnail_url.split("/").pop();
-      if (oldPath) await supabase.storage.from("course-covers").remove([oldPath]);
-    }
+    const storagePath = `cover-${course.id}.${ext}`;
 
     const { error: uploadError } = await supabase.storage
       .from("course-covers")
-      .upload(fileName, file, { contentType: file.type, upsert: true });
+      .upload(storagePath, file, { contentType: file.type, upsert: true });
 
     if (uploadError) {
       setUploadingCover(false);
-      showMsg("error", `Cover upload failed: ${uploadError.message}`);
+      showMsg("error", `Upload failed: ${uploadError.message}`);
       return;
     }
 
-    const { data: { publicUrl } } = supabase.storage.from("course-covers").getPublicUrl(fileName);
-
+    // Store the storage PATH (not a public URL) in the database
     const { error: dbError } = await supabase.from("course_settings")
-      .update({ thumbnail_url: publicUrl })
+      .update({ thumbnail_url: storagePath })
       .eq("id", course.id);
 
+    if (dbError) { setUploadingCover(false); showMsg("error", dbError.message); return; }
+
+    // Get a signed URL for preview
+    await getSignedCoverUrl(storagePath);
+    setCourse(prev => prev ? { ...prev, thumbnail_url: storagePath } : prev);
     setUploadingCover(false);
-    if (dbError) { showMsg("error", dbError.message); return; }
-    setCourse(prev => prev ? { ...prev, thumbnail_url: publicUrl } : prev);
-    showMsg("success", "Cover image updated!");
+    showMsg("success", "Cover image uploaded!");
   }
 
   async function addModule() {
@@ -159,49 +155,23 @@ export default function CurriculumPage() {
     const moduleId = activeUploadModuleId;
     if (!file || !moduleId) return;
     e.target.value = "";
-
-    if (file.size > 500 * 1024 * 1024) { showMsg("error", "File too large. Maximum size is 500MB."); return; }
-
+    if (file.size > 500 * 1024 * 1024) { showMsg("error", "File too large. Max 500MB."); return; }
     const form = lessonForms[moduleId];
-    if (!form?.title?.trim()) { showMsg("error", "Please enter a lesson title first."); return; }
-
+    if (!form?.title?.trim()) { showMsg("error", "Enter a lesson title first."); return; }
     setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: true, progress: 20, error: "" } }));
-
     const supabase = createClient();
     const ext = file.name.split(".").pop();
     const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-
     try {
-      const { error: uploadError } = await supabase.storage
-        .from("course-videos").upload(fileName, file, { contentType: file.type, upsert: false });
-
-      if (uploadError) {
-        setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: false, progress: 0, error: uploadError.message } }));
-        showMsg("error", `Upload failed: ${uploadError.message}`);
-        return;
-      }
-
+      const { error: uploadError } = await supabase.storage.from("course-videos").upload(fileName, file, { contentType: file.type, upsert: false });
+      if (uploadError) { setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: false, progress: 0, error: uploadError.message } })); showMsg("error", `Upload failed: ${uploadError.message}`); return; }
       setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], progress: 85 } }));
-
       const mod = modules.find(m => m.id === moduleId);
-      const { error: dbError } = await supabase.from("videos").insert({
-        module_id: moduleId,
-        title: form.title.trim(),
-        description: form.description || "",
-        storage_path: fileName,
-        order_index: mod?.lessons?.length || 0,
-        published: true,
-      });
-
-      if (dbError) {
-        setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: false, progress: 0, error: dbError.message } }));
-        showMsg("error", dbError.message);
-        return;
-      }
-
+      const { error: dbError } = await supabase.from("videos").insert({ module_id: moduleId, title: form.title.trim(), description: form.description || "", storage_path: fileName, order_index: mod?.lessons?.length || 0, published: true });
+      if (dbError) { setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: false, progress: 0, error: dbError.message } })); showMsg("error", dbError.message); return; }
       setLessonForms(prev => ({ ...prev, [moduleId]: { title: "", description: "", uploading: false, progress: 100, error: "" } }));
       setTimeout(() => setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], progress: 0 } })), 1500);
-      showMsg("success", `"${form.title}" uploaded! Add another or cancel to close.`);
+      showMsg("success", `"${form.title}" uploaded! Add another or cancel.`);
       await loadAll();
     } catch (err: any) {
       setLessonForms(prev => ({ ...prev, [moduleId]: { ...prev[moduleId], uploading: false, progress: 0, error: err.message } }));
@@ -218,11 +188,7 @@ export default function CurriculumPage() {
     await loadAll();
   }
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <div className="animate-pulse text-brand text-lg">Loading...</div>
-    </div>
-  );
+  if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-pulse text-brand text-lg">Loading...</div></div>;
 
   return (
     <div className="max-w-4xl">
@@ -235,12 +201,10 @@ export default function CurriculumPage() {
         </div>
       )}
 
-      {/* Hidden file inputs */}
       <input ref={fileInputRef} type="file" accept="video/mp4,video/webm,video/quicktime,video/mov" className="hidden" onChange={handleFileSelected} />
       <input ref={coverInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) uploadCoverImage(f); e.target.value = ""; }} />
 
-      {/* COURSE SETTINGS */}
       {course && (
         <div className="bg-white border border-gray-100 rounded-2xl p-8 mb-8">
           <h2 className="text-lg font-bold mb-6">📋 Course Settings</h2>
@@ -249,37 +213,31 @@ export default function CurriculumPage() {
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-3">Course Cover Image</label>
             <div className="flex items-start gap-5">
-              {/* Preview */}
-              <div
-                onClick={() => coverInputRef.current?.click()}
-                className="w-48 h-28 rounded-2xl overflow-hidden border-2 border-dashed border-gray-200 hover:border-brand cursor-pointer transition-colors flex-shrink-0 relative group">
-                {course.thumbnail_url ? (
+              <div onClick={() => coverInputRef.current?.click()}
+                className="w-48 h-28 rounded-2xl overflow-hidden border-2 border-dashed border-gray-200 hover:border-brand cursor-pointer transition-colors flex-shrink-0 bg-gray-50 relative group">
+                {coverPreviewUrl ? (
                   <>
-                    <img src={course.thumbnail_url} alt="Course cover" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display="none"; }} />
+                    <img src={coverPreviewUrl} alt="Course cover" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <p className="text-white text-xs font-medium">Change Image</p>
                     </div>
                   </>
                 ) : (
-                  <div className="w-full h-full bg-gray-50 flex flex-col items-center justify-center gap-2">
-                    {uploadingCover ? (
-                      <div className="animate-pulse text-brand text-xs">Uploading...</div>
-                    ) : (
-                      <>
-                        <span className="text-2xl">🖼️</span>
-                        <p className="text-xs text-gray-400 text-center px-2">Click to upload cover</p>
-                      </>
-                    )}
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-2">
+                    {uploadingCover
+                      ? <div className="animate-pulse text-brand text-xs font-medium">Uploading...</div>
+                      : <><span className="text-2xl">🖼️</span><p className="text-xs text-gray-400 text-center px-2">Click to upload</p></>
+                    }
                   </div>
                 )}
               </div>
               <div className="text-sm text-gray-500 pt-1">
                 <p className="font-medium text-gray-700 mb-1">Course cover image</p>
-                <p>This appears on the student dashboard as the course card banner.</p>
+                <p>Appears on the student dashboard as the course banner.</p>
                 <p className="mt-1 text-xs text-gray-400">Recommended: 1280×720px · JPG or PNG · Max 5MB</p>
                 <button onClick={() => coverInputRef.current?.click()} disabled={uploadingCover}
                   className="mt-3 text-xs bg-brand text-white px-4 py-2 rounded-lg hover:bg-brand-dark transition-colors disabled:opacity-50">
-                  {uploadingCover ? "Uploading..." : course.thumbnail_url ? "Change Cover" : "Upload Cover"}
+                  {uploadingCover ? "Uploading..." : coverPreviewUrl ? "Change Cover" : "Upload Cover"}
                 </button>
               </div>
             </div>
@@ -288,20 +246,17 @@ export default function CurriculumPage() {
           <div className="border-t border-gray-100 pt-6 space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Course Title *</label>
-              <input type="text" value={course.title}
-                onChange={e => setCourse({ ...course, title: e.target.value })}
+              <input type="text" value={course.title} onChange={e => setCourse({ ...course, title: e.target.value })}
                 className="w-full border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-brand" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Course Description</label>
-              <textarea value={course.description || ""} rows={3}
-                onChange={e => setCourse({ ...course, description: e.target.value })}
+              <textarea value={course.description || ""} rows={3} onChange={e => setCourse({ ...course, description: e.target.value })}
                 className="w-full border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-brand resize-none" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Price (₦)</label>
-              <input type="number" value={course.price}
-                onChange={e => setCourse({ ...course, price: parseInt(e.target.value) || 0 })}
+              <input type="number" value={course.price} onChange={e => setCourse({ ...course, price: parseInt(e.target.value) || 0 })}
                 className="w-40 border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:border-brand" />
             </div>
             <button onClick={saveCourse} disabled={saving}
@@ -318,24 +273,18 @@ export default function CurriculumPage() {
           <h2 className="text-lg font-bold">📚 Curriculum</h2>
           <span className="text-sm text-gray-400">{modules.length} modules · {modules.reduce((a, m) => a + m.lessons.length, 0)} lessons</span>
         </div>
-
         <div className="space-y-4 mb-8">
           {modules.length === 0 && (
-            <div className="text-center py-10 text-gray-400 border-2 border-dashed border-gray-100 rounded-xl">
-              No modules yet. Add your first module below.
-            </div>
+            <div className="text-center py-10 text-gray-400 border-2 border-dashed border-gray-100 rounded-xl">No modules yet.</div>
           )}
-
           {modules.map((mod, modIndex) => {
             const form = lessonForms[mod.id] || { title: "", description: "", uploading: false, progress: 0, error: "" };
             const isExpanded = expandedModule === mod.id;
             const isAddingLesson = showLessonForm === mod.id;
-
             return (
               <div key={mod.id} className="border border-gray-200 rounded-xl overflow-hidden">
                 <div className="flex items-center justify-between px-5 py-4 bg-gray-50">
-                  <button onClick={() => setExpandedModule(isExpanded ? null : mod.id)}
-                    className="flex items-center gap-3 flex-1 text-left">
+                  <button onClick={() => setExpandedModule(isExpanded ? null : mod.id)} className="flex items-center gap-3 flex-1 text-left">
                     <span className="text-xs font-mono text-gray-400 bg-gray-200 px-2 py-0.5 rounded">M{modIndex + 1}</span>
                     <span className="font-semibold text-gray-800">{mod.title}</span>
                     <span className="text-xs text-gray-400">{mod.lessons.length} lesson{mod.lessons.length !== 1 ? "s" : ""}</span>
@@ -346,17 +295,13 @@ export default function CurriculumPage() {
                       className={`text-xs px-3 py-1.5 rounded-lg font-medium ${mod.published ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}>
                       {mod.published ? "Live" : "Hidden"}
                     </button>
-                    <button onClick={() => deleteModule(mod.id)}
-                      className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-500 hover:bg-red-100">Delete</button>
+                    <button onClick={() => deleteModule(mod.id)} className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-500 hover:bg-red-100">Delete</button>
                   </div>
                 </div>
-
                 {isExpanded && (
                   <div className="p-5">
                     <div className="space-y-2 mb-4">
-                      {mod.lessons.length === 0 && !isAddingLesson && (
-                        <p className="text-sm text-gray-400 text-center py-3">No lessons yet.</p>
-                      )}
+                      {mod.lessons.length === 0 && !isAddingLesson && <p className="text-sm text-gray-400 text-center py-3">No lessons yet.</p>}
                       {mod.lessons.map((lesson, li) => (
                         <div key={lesson.id} className="flex items-center justify-between bg-gray-50 rounded-xl px-4 py-3">
                           <div className="flex items-center gap-3">
@@ -366,50 +311,35 @@ export default function CurriculumPage() {
                               {lesson.description && <p className="text-xs text-gray-400">{lesson.description}</p>}
                             </div>
                           </div>
-                          <button onClick={() => deleteLesson(lesson.id, lesson.storage_path)}
-                            className="text-xs px-3 py-1 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 ml-4 flex-shrink-0">Delete</button>
+                          <button onClick={() => deleteLesson(lesson.id, lesson.storage_path)} className="text-xs px-3 py-1 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 ml-4">Delete</button>
                         </div>
                       ))}
                     </div>
-
                     {!isAddingLesson ? (
-                      <button onClick={() => initLessonForm(mod.id)}
-                        className="w-full text-sm text-brand border-2 border-dashed border-brand/30 hover:border-brand rounded-xl py-3 transition-colors">
-                        + Add Lesson to this Module
-                      </button>
+                      <button onClick={() => initLessonForm(mod.id)} className="w-full text-sm text-brand border-2 border-dashed border-brand/30 hover:border-brand rounded-xl py-3 transition-colors">+ Add Lesson</button>
                     ) : (
                       <div className="border border-brand/20 rounded-xl p-4 bg-brand-light/20 space-y-3">
                         <p className="text-sm font-semibold text-brand">New Lesson</p>
-                        <input type="text" placeholder="Lesson title *"
-                          value={form.title} onChange={e => updateLessonForm(mod.id, "title", e.target.value)}
+                        <input type="text" placeholder="Lesson title *" value={form.title} onChange={e => updateLessonForm(mod.id, "title", e.target.value)}
                           className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-brand" />
-                        <input type="text" placeholder="Description (optional)"
-                          value={form.description} onChange={e => updateLessonForm(mod.id, "description", e.target.value)}
+                        <input type="text" placeholder="Description (optional)" value={form.description} onChange={e => updateLessonForm(mod.id, "description", e.target.value)}
                           className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-brand" />
                         {form.error && <p className="text-red-500 text-xs">❌ {form.error}</p>}
                         {form.uploading ? (
                           <div className="space-y-2">
-                            <div className="flex justify-between">
-                              <p className="text-sm text-brand font-medium">Uploading video...</p>
-                              <p className="text-xs text-gray-400">{form.progress}%</p>
-                            </div>
-                            <div className="w-full bg-gray-100 rounded-full h-2.5">
-                              <div className="bg-brand h-2.5 rounded-full transition-all duration-300" style={{ width: `${form.progress}%` }} />
-                            </div>
-                            <p className="text-xs text-gray-400">Please wait — do not close this page.</p>
+                            <div className="flex justify-between"><p className="text-sm text-brand font-medium">Uploading...</p><p className="text-xs text-gray-400">{form.progress}%</p></div>
+                            <div className="w-full bg-gray-100 rounded-full h-2.5"><div className="bg-brand h-2.5 rounded-full transition-all duration-300" style={{ width: `${form.progress}%` }} /></div>
+                            <p className="text-xs text-gray-400">Do not close this page.</p>
                           </div>
                         ) : form.progress === 100 ? (
-                          <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700">
-                            ✅ Uploaded! Add another lesson or cancel to close.
-                          </div>
+                          <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-700">✅ Uploaded! Add another or cancel.</div>
                         ) : (
                           <button onClick={() => triggerUpload(mod.id)} disabled={!form.title.trim()}
                             className="w-full bg-brand hover:bg-brand-dark disabled:opacity-40 text-white font-semibold py-3 rounded-xl text-sm transition-colors">
                             📹 Select Video & Upload
                           </button>
                         )}
-                        <button onClick={() => resetLessonForm(mod.id)} disabled={form.uploading}
-                          className="w-full text-sm text-gray-400 hover:text-gray-600 py-1 disabled:opacity-40">
+                        <button onClick={() => resetLessonForm(mod.id)} disabled={form.uploading} className="w-full text-sm text-gray-400 hover:text-gray-600 py-1 disabled:opacity-40">
                           {form.uploading ? "Upload in progress..." : "Cancel"}
                         </button>
                       </div>
@@ -420,13 +350,11 @@ export default function CurriculumPage() {
             );
           })}
         </div>
-
         <div className="border-t border-gray-100 pt-6">
           <p className="text-sm font-semibold text-gray-700 mb-3">Add New Module</p>
           <div className="flex gap-3">
-            <input type="text" placeholder="e.g. Introduction to the Course"
-              value={newModuleTitle} onChange={e => setNewModuleTitle(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && addModule()}
+            <input type="text" placeholder="e.g. Introduction to the Course" value={newModuleTitle}
+              onChange={e => setNewModuleTitle(e.target.value)} onKeyDown={e => e.key === "Enter" && addModule()}
               className="flex-1 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand" />
             <button onClick={addModule} disabled={addingModule || !newModuleTitle.trim()}
               className="bg-brand hover:bg-brand-dark text-white font-semibold px-6 py-3 rounded-xl transition-colors disabled:opacity-50 whitespace-nowrap">

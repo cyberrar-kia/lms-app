@@ -3,12 +3,12 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 
-
 type CourseSettings = { id: string; title: string; description: string; price: number; thumbnail_url: string | null };
 type Module = { id: string; title: string; lessons: { id: string }[] };
 
 export default function DashboardPage() {
   const [course, setCourse] = useState<CourseSettings | null>(null);
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [modules, setModules] = useState<Module[]>([]);
   const [totalLessons, setTotalLessons] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -23,7 +23,16 @@ export default function DashboardPage() {
         if (profile) setUserName(profile.full_name.split(" ")[0]);
       }
       const { data: cs } = await supabase.from("course_settings").select("*").single();
-      if (cs) setCourse(cs);
+      if (cs) {
+        setCourse(cs);
+        // Generate signed URL for cover image
+        if (cs.thumbnail_url) {
+          const { data: signedData } = await supabase.storage
+            .from("course-covers")
+            .createSignedUrl(cs.thumbnail_url, 3600);
+          if (signedData?.signedUrl) setCoverUrl(signedData.signedUrl);
+        }
+      }
       const { data: mods } = await supabase.from("modules").select("id, title").eq("published", true).order("order_index");
       if (mods && mods.length > 0) {
         const { data: vids } = await supabase.from("videos").select("id, module_id").eq("published", true).in("module_id", mods.map(m => m.id));
@@ -53,60 +62,42 @@ export default function DashboardPage() {
         <span className="font-bold text-xl text-brand">LearnHub</span>
         <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-red-500 transition-colors">Log out</button>
       </header>
-
       <main className="flex-1 max-w-4xl mx-auto w-full px-6 py-12">
         <div className="mb-10">
           <h1 className="text-3xl font-bold text-gray-900">Welcome back{userName ? `, ${userName}` : ""}! 👋</h1>
           <p className="text-gray-500 mt-2">Ready to continue learning? Pick up where you left off.</p>
         </div>
-
         {course ? (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-            {/* Cover Image or Gradient Fallback */}
-            <div className="relative h-52 overflow-hidden">
-              {course.thumbnail_url ? (
-                <img src={course.thumbnail_url} alt={course.title} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display="none"; }} />
+            {/* Cover */}
+            <div style={{ height: "208px", overflow: "hidden", position: "relative" }}>
+              {coverUrl ? (
+                <img src={coverUrl} alt={course.title} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
               ) : (
-                <div className="w-full h-full bg-gradient-to-br from-brand to-brand-dark flex items-center justify-center">
-                  <div className="text-center">
-                    <div className="text-5xl mb-2">🎓</div>
-                    <span className="text-white/70 text-sm font-medium uppercase tracking-widest">Your Course</span>
-                  </div>
+                <div style={{ width: "100%", height: "100%", background: "linear-gradient(135deg, #6C3DE0, #4B24B0)", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: "8px" }}>
+                  <span style={{ fontSize: "48px" }}>🎓</span>
+                  <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "12px", fontWeight: 600, letterSpacing: "2px", textTransform: "uppercase" }}>Your Course</span>
                 </div>
               )}
-              {/* Overlay badge */}
-              <div className="absolute top-4 left-4">
-                <span className="bg-white/20 backdrop-blur-sm text-white text-xs font-semibold px-3 py-1.5 rounded-full border border-white/30">
+              <div style={{ position: "absolute", top: "16px", left: "16px" }}>
+                <span style={{ background: "rgba(255,255,255,0.2)", backdropFilter: "blur(8px)", color: "white", fontSize: "12px", fontWeight: 600, padding: "6px 12px", borderRadius: "999px", border: "1px solid rgba(255,255,255,0.3)" }}>
                   Enrolled ✓
                 </span>
               </div>
             </div>
 
             <div className="p-8">
-              <div className="mb-6">
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">{course.title}</h2>
-                {course.description && <p className="text-gray-500 leading-relaxed">{course.description}</p>}
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">{course.title}</h2>
+              {course.description && <p className="text-gray-500 leading-relaxed mb-6">{course.description}</p>}
+
+              <div className="flex gap-6 py-6 border-y border-gray-100 mb-6">
+                <div className="text-center"><p className="text-2xl font-bold text-gray-900">{modules.length}</p><p className="text-xs text-gray-400 mt-1">Modules</p></div>
+                <div className="w-px bg-gray-100" />
+                <div className="text-center"><p className="text-2xl font-bold text-gray-900">{totalLessons}</p><p className="text-xs text-gray-400 mt-1">Lessons</p></div>
+                <div className="w-px bg-gray-100" />
+                <div className="text-center"><p className="text-2xl font-bold text-gray-900">∞</p><p className="text-xs text-gray-400 mt-1">Lifetime Access</p></div>
               </div>
 
-              {/* Stats */}
-              <div className="flex gap-6 mb-8 py-6 border-y border-gray-100">
-                <div className="text-center">
-                  <p className="text-2xl font-bold text-gray-900">{modules.length}</p>
-                  <p className="text-xs text-gray-400 mt-1">Modules</p>
-                </div>
-                <div className="w-px bg-gray-100" />
-                <div className="text-center">
-                  <p className="text-2xl font-bold text-gray-900">{totalLessons}</p>
-                  <p className="text-xs text-gray-400 mt-1">Lessons</p>
-                </div>
-                <div className="w-px bg-gray-100" />
-                <div className="text-center">
-                  <p className="text-2xl font-bold text-gray-900">∞</p>
-                  <p className="text-xs text-gray-400 mt-1">Lifetime Access</p>
-                </div>
-              </div>
-
-              {/* Module Preview */}
               {modules.length > 0 && (
                 <div className="mb-8">
                   <p className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">What's inside</p>
