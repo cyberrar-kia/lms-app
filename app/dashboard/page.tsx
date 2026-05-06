@@ -2,12 +2,14 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
 type CourseSettings = { id: string; title: string; description: string; price: number; thumbnail_url: string | null };
 type Module = { id: string; title: string; lessons: { id: string }[] };
 type Profile = { full_name: string; subscription_status: string | null; next_payment_date: string | null; paid: boolean };
 
-export default function DashboardPage() {
+function DashboardContent() {
   const [course, setCourse] = useState<CourseSettings | null>(null);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [modules, setModules] = useState<Module[]>([]);
@@ -15,19 +17,44 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [renewing, setRenewing] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const searchParams = useSearchParams();
+
+  async function loadProfile() {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: p } = await supabase
+        .from("profiles")
+        .select("full_name, subscription_status, next_payment_date, paid")
+        .eq("id", user.id)
+        .single();
+      if (p) setProfile(p);
+    }
+  }
 
   useEffect(() => {
     async function load() {
       const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data: p } = await supabase
-          .from("profiles")
-          .select("full_name, subscription_status, next_payment_date, paid")
-          .eq("id", user.id)
-          .single();
-        if (p) setProfile(p);
+
+      // Check if returning from Paystack renewal
+      const reference = searchParams.get("reference") || searchParams.get("trxref");
+      if (reference) {
+        setVerifying(true);
+        // Verify payment and update status
+        await fetch("/api/paystack/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reference }),
+        });
+        // Wait briefly for webhook to process, then reload profile
+        await new Promise(r => setTimeout(r, 2000));
+        setVerifying(false);
+        // Clean URL
+        window.history.replaceState({}, "", "/dashboard");
       }
+
+      await loadProfile();
 
       const { data: cs } = await supabase.from("course_settings").select("*").single();
       if (cs) {
@@ -60,17 +87,18 @@ export default function DashboardPage() {
     setRenewing(true);
     const res = await fetch("/api/paystack/renew", { method: "POST" });
     const data = await res.json();
-    if (data.authorization_url) {
-      window.location.href = data.authorization_url;
-    } else {
-      alert("Could not initialize renewal. Please try again.");
-      setRenewing(false);
-    }
+    if (data.authorization_url) window.location.href = data.authorization_url;
+    else { alert("Could not initialize renewal. Please try again."); setRenewing(false); }
   };
 
-  if (loading) return (
+  if (loading || verifying) return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="animate-pulse text-brand text-xl">Loading...</div>
+      <div className="text-center">
+        <div className="animate-pulse text-brand text-xl mb-2">
+          {verifying ? "Confirming your payment..." : "Loading..."}
+        </div>
+        {verifying && <p className="text-gray-400 text-sm">Please wait while we activate your access.</p>}
+      </div>
     </div>
   );
 
@@ -102,12 +130,8 @@ export default function DashboardPage() {
                 <p className={`font-semibold text-sm ${subExpired ? "text-red-700" : "text-green-700"}`}>
                   {subExpired ? "Subscription Expired" : "Subscription Active"}
                 </p>
-                {nextPayment && !subExpired && (
-                  <p className="text-xs text-green-600">Next renewal: {nextPayment}</p>
-                )}
-                {subExpired && (
-                  <p className="text-xs text-red-600">Renew to continue accessing your course</p>
-                )}
+                {nextPayment && !subExpired && <p className="text-xs text-green-600">Next renewal: {nextPayment}</p>}
+                {subExpired && <p className="text-xs text-red-600">Renew to continue accessing your course</p>}
               </div>
             </div>
             {subExpired && (
@@ -195,5 +219,13 @@ export default function DashboardPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-50"><div className="animate-pulse text-brand text-xl">Loading...</div></div>}>
+      <DashboardContent />
+    </Suspense>
   );
 }
